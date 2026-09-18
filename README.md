@@ -1002,7 +1002,7 @@ Future development will focus on:
 
 \- **Pratham Singh** — Team Lead, System Architecture, Agent Workflow, Evaluation Framework
 
-\- **Shivansh Shukla** — Software Development, Testing, Documentation & Collaboration
+\- **Shivansh Shukla** — Project Collaborator
 
 \---
 
