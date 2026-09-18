@@ -1,6 +1,8 @@
 ﻿langchain
 langgraph
+langchain-google-genai
 langchain-openai
-python-dotenv
 pydantic
+python-dotenv
+tavily-python
 requests

@@ -1,6 +1,33 @@
-﻿.venv/
+﻿# Virtual environments
+.venv/
+venv/
+env/
+
+# Python cache
 __pycache__/
-*.pyc
-.env
+*.py[cod]
+*.pyo
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Jupyter
 .ipynb_checkpoints/
+
+# IDEs
 .vscode/
+.idea/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
