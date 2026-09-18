@@ -3,6 +3,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.config.llm import llm
+from app.utils.llm_retry import invoke_structured_with_retry
 
 
 class SupervisorDecision(BaseModel):
@@ -15,8 +16,6 @@ def supervisor_agent(query: str) -> str:
     """
     Decide which workflow should be used for the user's query.
     """
-
-    structured_llm = llm.with_structured_output(SupervisorDecision)
 
     prompt = f"""
 You are the supervisor of a multi-agent research system.
@@ -45,6 +44,10 @@ verified:
 Return the most appropriate workflow.
 """
 
-    decision = structured_llm.invoke(prompt)
+    decision = invoke_structured_with_retry(
+        llm=llm,
+        schema=SupervisorDecision,
+        prompt=prompt,
+    )
 
     return decision.route

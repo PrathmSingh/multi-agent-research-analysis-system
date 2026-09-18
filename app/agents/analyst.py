@@ -1,5 +1,7 @@
 from app.config.llm import llm
 from app.models.schemas import Source
+from app.utils.llm_response import extract_text
+from app.utils.llm_retry import invoke_with_retry
 
 
 def analyst_agent(research: str, sources: list[Source]) -> str:
@@ -38,6 +40,22 @@ Your task:
 Provide a concise and structured analysis.
 """
 
-    response = llm.invoke(prompt)
+    try:
+        response = invoke_with_retry(
+            llm,
+            prompt,
+        )
 
-    return response.content[0]["text"]
+    except Exception as exc:
+        raise RuntimeError(
+            f"Analysis LLM call failed: {exc}"
+        ) from exc
+
+    try:
+        return extract_text(response)
+
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"Invalid analysis LLM response: {exc}"
+        ) from exc
+    

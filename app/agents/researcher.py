@@ -1,6 +1,8 @@
 from app.config.llm import llm
 from app.models.schemas import Source
 from app.tools.web_search import web_search
+from app.utils.llm_response import extract_text
+from app.utils.llm_retry import invoke_with_retry
 
 
 def research_agent(query: str) -> tuple[str, list[Source]]:
@@ -48,6 +50,23 @@ Your task:
 Provide a concise, structured research summary.
 """
 
-    response = llm.invoke(prompt)
+    try:
+        response = invoke_with_retry(
+            llm,
+            prompt,
+        )
 
-    return response.content[0]["text"], sources
+    except Exception as exc:
+        raise RuntimeError(
+            f"Research LLM call failed: {exc}"
+        ) from exc
+
+    try:
+        research = extract_text(response)
+
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"Invalid research LLM response: {exc}"
+    ) from exc
+
+    return research, sources

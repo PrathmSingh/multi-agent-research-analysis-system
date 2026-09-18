@@ -1,5 +1,7 @@
 from app.config.llm import llm
 from app.models.schemas import Source
+from app.utils.llm_response import extract_text
+from app.utils.llm_retry import invoke_with_retry
 
 
 def fact_checker_agent(
@@ -52,6 +54,22 @@ Finish with an overall verdict:
 Be strict and rely only on the provided evidence.
 """
 
-    response = llm.invoke(prompt)
 
-    return response.content[0]["text"]
+    try:
+        response = invoke_with_retry(
+            llm,
+            prompt,
+        )
+
+    except Exception as exc:
+        raise RuntimeError(
+            f"Fact-check LLM call failed: {exc}"
+    ) from exc
+
+    try:
+        return extract_text(response)
+
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"Invalid fact-check LLM response: {exc}"
+    ) from exc

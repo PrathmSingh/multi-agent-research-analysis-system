@@ -9,6 +9,11 @@ from app.agents.fact_checker import fact_checker_agent
 from app.agents.reporter import reporter_agent
 from app.agents.citation_validator import validate_citations
 
+from app.evaluation.citation_eval import calculate_citation_accuracy
+from app.evaluation.source_eval import calculate_source_utilization
+from app.evaluation.llm_judge import evaluate_answer
+from app.evaluation.aggregate_eval import calculate_overall_score
+
 
 # ============================================================
 # LangGraph Node Functions
@@ -27,7 +32,9 @@ def supervisor_node(state: ResearchState):
 def research_node(state: ResearchState):
     """Search the web and collect structured research sources."""
 
-    research, sources = research_agent(state["query"])
+    research, sources = research_agent(
+        state["query"]
+    )
 
     return {
         "research": research,
@@ -78,26 +85,59 @@ def reporter_node(state: ResearchState):
         "final_report": final_report,
 
         # Track how many times the report has been generated.
-        "citation_retry_count": state["citation_retry_count"] + 1,
+        "citation_retry_count": (
+            state["citation_retry_count"] + 1
+        ),
     }
 
 
 def citation_validator_node(state: ResearchState):
-    """Validate citations used in the generated report."""
+    """Validate citations and calculate citation metrics."""
 
     validation = validate_citations(
         state["final_report"],
         state["sources"],
     )
 
+    citation_accuracy = calculate_citation_accuracy(
+        validation["cited_sources"],
+        validation["invalid_citations"],
+    )
+
+    source_utilization = calculate_source_utilization(
+        total_sources=len(state["sources"]),
+        cited_sources=validation["cited_sources"],
+    )
+
     return {
         "citation_validation": validation,
-
-        # Pass validation feedback back to the Reporter
-        # if another generation attempt is required.
+        "citation_accuracy": citation_accuracy,
+        "source_utilization": source_utilization,
         "citation_feedback": validation["feedback"],
-
         "citation_retry_count": state["citation_retry_count"],
+    }
+
+
+def llm_judge_node(state: ResearchState):
+    """Evaluate the final report using an LLM judge."""
+
+    evaluation = evaluate_answer(
+        query=state["query"],
+        report=state["final_report"],
+        research=state["research"],
+    )
+
+    overall_score = calculate_overall_score(
+        relevance=evaluation.relevance,
+        completeness=evaluation.completeness,
+        factuality=evaluation.factuality,
+    )
+
+    return {
+        "relevance_score": evaluation.relevance,
+        "completeness_score": evaluation.completeness,
+        "factuality_score": evaluation.factuality,
+        "overall_score": overall_score,
     }
 
 
@@ -107,9 +147,10 @@ def citation_validator_node(state: ResearchState):
 
 def citation_retry_router(state: ResearchState):
     """
-    Decide whether the report should be accepted or regenerated.
+    Decide whether the report should be regenerated
+    or sent to the LLM judge.
 
-    The workflow stops when:
+    The workflow evaluates the report when:
     1. All citations are valid, or
     2. The retry limit has been reached.
     """
@@ -117,15 +158,15 @@ def citation_retry_router(state: ResearchState):
     validation = state["citation_validation"]
     retry_count = state["citation_retry_count"]
 
-    # Citations are valid → finish the workflow.
+    # Citations are valid → evaluate the report.
     if validation["all_citations_valid"]:
-        return "end"
+        return "evaluate"
 
     # Prevent infinite report-generation loops.
     if retry_count >= 2:
-        return "end"
+        return "evaluate"
 
-    # Invalid citations and retries are still available.
+    # Invalid citations and retry is still available.
     return "retry"
 
 
@@ -136,46 +177,73 @@ def citation_retry_router(state: ResearchState):
 builder = StateGraph(ResearchState)
 
 
-# ------------------------------------------------------------
+# ============================================================
 # Register Nodes
-# ------------------------------------------------------------
+# ============================================================
 
-builder.add_node("supervisor", supervisor_node)
-builder.add_node("research", research_node)
-builder.add_node("analyst", analyst_node)
-builder.add_node("fact_checker", fact_checker_node)
-builder.add_node("reporter", reporter_node)
-builder.add_node("citation_validator", citation_validator_node)
+builder.add_node(
+    "supervisor",
+    supervisor_node,
+)
+
+builder.add_node(
+    "research",
+    research_node,
+)
+
+builder.add_node(
+    "analyst",
+    analyst_node,
+)
+
+builder.add_node(
+    "fact_checker",
+    fact_checker_node,
+)
+
+builder.add_node(
+    "reporter",
+    reporter_node,
+)
+
+builder.add_node(
+    "citation_validator",
+    citation_validator_node,
+)
+
+builder.add_node(
+    "llm_judge",
+    llm_judge_node,
+)
 
 
 # ============================================================
 # Workflow Edges
 # ============================================================
 
-# Start → Supervisor
+# ------------------------------------------------------------
+# START → Supervisor
+# ------------------------------------------------------------
+
 builder.add_edge(
     START,
     "supervisor",
 )
 
 
+# ------------------------------------------------------------
 # Supervisor → Research
 #
-# The Supervisor chooses one of:
-# quick / standard / verified
-#
-# All three workflows begin with research.
-builder.add_conditional_edges(
+# Every workflow starts with research.
+# ------------------------------------------------------------
+
+builder.add_edge(
     "supervisor",
-    lambda state: state["route"],
-    {
-        "quick": "research",
-        "standard": "research",
-        "verified": "research",
-    },
+    "research",
 )
 
 
+# ------------------------------------------------------------
 # Research → Next Agent
 #
 # Quick:
@@ -186,6 +254,8 @@ builder.add_conditional_edges(
 #
 # Verified:
 #     Research → Analyst
+# ------------------------------------------------------------
+
 builder.add_conditional_edges(
     "research",
     lambda state: state["route"],
@@ -197,6 +267,7 @@ builder.add_conditional_edges(
 )
 
 
+# ------------------------------------------------------------
 # Analyst → Next Agent
 #
 # Standard:
@@ -204,6 +275,8 @@ builder.add_conditional_edges(
 #
 # Verified:
 #     Analyst → Fact Checker
+# ------------------------------------------------------------
+
 builder.add_conditional_edges(
     "analyst",
     lambda state: state["route"],
@@ -214,37 +287,56 @@ builder.add_conditional_edges(
 )
 
 
+# ------------------------------------------------------------
 # Fact Checker → Reporter
+# ------------------------------------------------------------
+
 builder.add_edge(
     "fact_checker",
     "reporter",
 )
 
 
+# ------------------------------------------------------------
 # Reporter → Citation Validator
+# ------------------------------------------------------------
+
 builder.add_edge(
     "reporter",
     "citation_validator",
 )
 
 
-# Citation Validator → Retry or End
+# ------------------------------------------------------------
+# Citation Validator → Retry or LLM Judge
 #
 # Valid citations:
-#     Citation Validator → END
+#     Citation Validator → LLM Judge
 #
 # Invalid citations:
 #     Citation Validator → Reporter
 #
 # Retry limit reached:
-#     Citation Validator → END
+#     Citation Validator → LLM Judge
+# ------------------------------------------------------------
+
 builder.add_conditional_edges(
     "citation_validator",
     citation_retry_router,
     {
         "retry": "reporter",
-        "end": END,
+        "evaluate": "llm_judge",
     },
+)
+
+
+# ------------------------------------------------------------
+# LLM Judge → END
+# ------------------------------------------------------------
+
+builder.add_edge(
+    "llm_judge",
+    END,
 )
 
 

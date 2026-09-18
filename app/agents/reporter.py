@@ -1,6 +1,7 @@
 from app.config.llm import llm
 from app.models.schemas import Source
-
+from app.utils.llm_response import extract_text
+from app.utils.llm_retry import invoke_with_retry
 
 def reporter_agent(
     query: str,
@@ -63,6 +64,22 @@ Requirements:
 Return a polished, citation-backed research report.
 """
 
-    response = llm.invoke(prompt)
 
-    return response.content[0]["text"]
+    try:
+        response = invoke_with_retry(
+            llm,
+            prompt,
+        )
+
+    except Exception as exc:
+        raise RuntimeError(
+            f"Reporter LLM call failed: {exc}"
+        ) from exc
+
+    try:
+        return extract_text(response)
+
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"Invalid reporter LLM response: {exc}"
+        ) from exc
